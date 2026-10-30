@@ -686,6 +686,26 @@ PANEL_DOMAIN="HOST_DOMAIN_PLACEHOLDER"
 
 case "$1" in
     ssl)
+        echo -e "${CYAN}Ensuring OpenLiteSpeed is active and listening on port 80...${NC}"
+        
+        # Pre-flight check: Verify if port 80 is bound by OLS
+        if ! ss -tulpn | grep -q ':80 '; then
+            echo -e "${YELLOW}Port 80 is not active. Forcing OpenLiteSpeed recovery...${NC}"
+            sudo killall -9 litespeed lshttpd 2>/dev/null || true
+            sudo rm -rf /dev/shm/lsws/* 2>/dev/null || true
+            sudo rm -f /usr/local/lsws/logs/lshttpd.pid
+            sudo rm -f /usr/local/lsws/tmp/*.lock
+            sudo /usr/local/lsws/bin/lswsctrl start || true
+            sleep 2
+        fi
+
+        # Double-check port 80 state
+        if ! ss -tulpn | grep -q ':80 '; then
+            echo -e "${RED}Error: OpenLiteSpeed failed to bind to port 80. Cannot run AutoSSL challenge.${NC}"
+            echo -e "${YELLOW}Check /usr/local/lsws/logs/error.log for startup issues.${NC}"
+            exit 1
+        fi
+
         echo -e "${CYAN}Verifying DNS resolution for ${PANEL_DOMAIN}...${NC}"
         SERVER_IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
         DOMAIN_IP=$(dig +short A "${PANEL_DOMAIN}" | tail -n1)
