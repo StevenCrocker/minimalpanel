@@ -666,7 +666,7 @@ sudo systemctl enable --now minimalpanel-htaccess.service
 # 12. Generate Helper CLI Script (/usr/local/bin/minimalpanel & /usr/local/bin/mp)
 echo -e "${CYAN}[10/11] Installing Helper CLI Utility (/usr/local/bin/minimalpanel)...${NC}"
 
-cat << 'CLI_EOF' | sudo tee /usr/local/bin/minimalpanel > /dev/null
+sudo tee /usr/local/bin/minimalpanel > /dev/null << 'EOF'
 #!/bin/bash
 
 GREEN='\033[0;32m'
@@ -675,7 +675,7 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-PANEL_DOMAIN="${PANEL_DOMAIN}"
+PANEL_DOMAIN="HOST_DOMAIN_PLACEHOLDER"
 
 case "$1" in
     ssl)
@@ -751,8 +751,10 @@ case "$1" in
         echo -e "  ${GREEN}minimalpanel reset-2fa${NC} - Reset 2FA configuration"
         ;;
 esac
-CLI_EOF
+EOF
 
+# Safely inject the actual user domain into the generated CLI file
+sudo sed -i "s/HOST_DOMAIN_PLACEHOLDER/${PANEL_DOMAIN}/g" /usr/local/bin/minimalpanel
 sudo chmod +x /usr/local/bin/minimalpanel
 sudo ln -sf /usr/local/bin/minimalpanel /usr/local/bin/mp
 
