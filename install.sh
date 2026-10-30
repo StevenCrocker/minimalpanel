@@ -31,6 +31,7 @@ fi
 
 # 3. System Upgrades, Dependencies & Scheduled Security Updates
 echo -e "${CYAN}[1/11] Performing System Upgrade & Installing Dependencies...${NC}"
+export DEBIAN_FRONTEND=noninteractive
 sudo apt update -y && sudo apt upgrade -y
 sudo apt install -y python3 python3-pip python3-venv mariadb-server mariadb-client curl openssl unattended-upgrades cron ca-certificates gpg certbot dnsutils git jq inotify-tools
 
@@ -49,17 +50,19 @@ Restart=always
 RestartSec=3s
 MARIADB_OVERRIDE_EOF
 sudo systemctl daemon-reload
+sudo systemctl restart mariadb
 
-# 5. OpenLiteSpeed & PHP Runtimes (7.4, 8.2, 8.3, 8.4, 8.5)
-echo -e "${CYAN}[3/11] Installing OpenLiteSpeed & PHP Runtimes (7.4, 8.2, 8.3, 8.4, 8.5)...${NC}"
+# 5. OpenLiteSpeed & PHP Runtimes (7.4 through 8.5)
+echo -e "${CYAN}[3/11] Installing OpenLiteSpeed & PHP Runtimes...${NC}"
 wget -O - https://repo.litespeed.sh | sudo bash
 sudo apt update -y
+# Install modern PHP versions securely, allowing legacy 7.4 to fail gracefully if unsupported by OS
 sudo apt install -y openlitespeed \
-  lsphp74 lsphp74-mysql lsphp74-common \
   lsphp82 lsphp82-mysql lsphp82-common \
   lsphp83 lsphp83-mysql lsphp83-common \
   lsphp84 lsphp84-mysql lsphp84-common \
   lsphp85 lsphp85-mysql lsphp85-common || true
+sudo apt install -y lsphp74 lsphp74-mysql lsphp74-common || echo "Notice: PHP 7.4 is unavailable on this OS version and was skipped."
 
 # 6. Docker Engine (For Custom Docker Compose Sites)
 if ! command -v docker &> /dev/null; then
@@ -80,12 +83,14 @@ if ! command -v docker &> /dev/null; then
     sudo systemctl enable --now docker
 fi
 
-# 7. OpenSSH Chroot Rules & MariaDB Root Initialization
+# 7. OpenSSH Chroot Rules & MariaDB Root Password Initialization Fix
 echo -e "${CYAN}[5/11] Configuring SFTP Security Groups & Database Engine...${NC}"
 sudo groupadd -f sftp-users
 
 MYSQL_ROOT_PASS=$(openssl rand -hex 16)
-sudo mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASS}'; FLUSH PRIVILEGES;"
+# Safely set root password using sudo socket authentication bypass
+sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('${MYSQL_ROOT_PASS}'); FLUSH PRIVILEGES;" || \
+sudo mysql -e "SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${MYSQL_ROOT_PASS}'); FLUSH PRIVILEGES;"
 
 sudo mkdir -p /opt/minimalpanel
 sudo mkdir -p /var/www/vhosts
