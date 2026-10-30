@@ -604,9 +604,32 @@ echo -e "${CYAN}[8/11] Configuring OpenLiteSpeed Listeners & Virtual Host for ${
 
 OLS_CONFIG="/usr/local/lsws/conf/httpd_config.xml"
 
-if [ -f "$OLS_CONFIG" ]; then
-    # Ensure listeners for port 80 and 443 exist in httpd_config.xml
-    python3 -c '
+# Ensure the config directory exists
+sudo mkdir -p /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}
+
+# If OpenLiteSpeed config doesn't exist yet, create a minimal valid template
+if [ ! -f "$OLS_CONFIG" ]; then
+    sudo mkdir -p /usr/local/lsws/conf
+    cat << 'FALLBACK_OLS_EOF' | sudo tee "$OLS_CONFIG" > /dev/null
+<httpServerConfig>
+  <listeners>
+  </listeners>
+  <virtualHostList>
+    <virtualHost>
+      <name>Example</name>
+      <vhRoot>Example/</vhRoot>
+      <configFile>conf/vhosts/Example/vhconf.xml</configFile>
+      <allowSymbolLink>1</allowSymbolLink>
+      <enableScript>1</enableScript>
+      <restrained>1</restrained>
+    </virtualHost>
+  </virtualHostList>
+</httpServerConfig>
+FALLBACK_OLS_EOF
+fi
+
+# Ensure listeners for port 80 and 443 exist in httpd_config.xml
+python3 -c '
 config_path = "/usr/local/lsws/conf/httpd_config.xml"
 with open(config_path, "r") as f:
     content = f.read()
@@ -624,14 +647,16 @@ if "Port80" not in content:
     secure                  1
   }
 """
-    content = content.replace("listeners {", "listeners {" + new_listeners)
+    if "listeners {" in content:
+        content = content.replace("listeners {", "listeners {" + new_listeners)
+    elif "<listeners>" in content:
+        content = content.replace("<listeners>", "<listeners>" + new_listeners)
+    
     with open(config_path, "w") as f:
         f.write(content)
 '
-fi
 
 # Create Virtual Host configuration mapped to your panel domain
-sudo mkdir -p /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}
 cat << OLS_VHOST_EOF | sudo tee /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}/vhconf.conf > /dev/null
 docRoot                   /opt/minimalpanel
 enableGzip                1
@@ -652,15 +677,14 @@ context / {
 }
 OLS_VHOST_EOF
 
-if [ -f "$OLS_CONFIG" ]; then
-    # Automatically map the panel domain to this virtual host inside OLS config
-    python3 -c '
+# Automatically map the panel domain to this virtual host inside OLS config
+python3 -c '
 config_path = "/usr/local/lsws/conf/httpd_config.xml"
 domain = "'"${PANEL_DOMAIN}"'"
 vhost_snippet = f"""
-  virtualHost {{domain}} {{
-    vhRoot                  /usr/local/lsws/conf/vhosts/{{domain}}
-    configFile              vhosts/{{domain}}/vhconf.conf
+  virtualHost {domain} {{
+    vhRoot                  /usr/local/lsws/conf/vhosts/{domain}
+    configFile              vhosts/{domain}/vhconf.conf
     allowSymbolLink         1
     enableScript            1
     restrained              1
@@ -670,11 +694,14 @@ with open(config_path, "r") as f:
     content = f.read()
 
 if domain not in content:
-    content = content.replace("virtualHost Example {", vhost_snippet + "\n  virtualHost Example {")
+    if "virtualHost Example {" in content:
+        content = content.replace("virtualHost Example {", vhost_snippet + "\n  virtualHost Example {")
+    elif "<virtualHostList>" in content:
+        content = content.replace("<virtualHostList>", "<virtualHostList>" + vhost_snippet)
+    
     with open(config_path, "w") as f:
         f.write(content)
 '
-fi
 
 # Start/Restart OpenLiteSpeed cleanly
 sudo killall -9 litespeed lshttpd 2>/dev/null || true
