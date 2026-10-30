@@ -599,8 +599,32 @@ SERVICE_EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now minimalpanel.service
 
-# 10. Configure OpenLiteSpeed Reverse Proxy Virtual Host
-echo -e "${CYAN}[8/11] Configuring OpenLiteSpeed Reverse Proxy for ${PANEL_DOMAIN}...${NC}"
+# 10. Configure OpenLiteSpeed Reverse Proxy Virtual Host & Listeners (Ports 80 & 443)
+echo -e "${CYAN}[8/11] Configuring OpenLiteSpeed Listeners & Virtual Host for ${PANEL_DOMAIN}...${NC}"
+
+# Ensure listeners for port 80 and 443 exist in httpd_config.xml
+python3 -c '
+config_path = "/usr/local/lsws/conf/httpd_config.xml"
+if open(config_path).read().count("port 80") == 0:
+    with open(config_path, "r") as f:
+        content = f.read()
+    
+    new_listeners = """
+  listener Port80 {
+    address                 *
+    port                    80
+    secure                  0
+  }
+  listener Port443 {
+    address                 *
+    port                    443
+    secure                  1
+  }
+"""
+    content = content.replace("listeners {", "listeners {" + new_listeners)
+    with open(config_path, "w") as f:
+        f.write(content)
+'
 
 sudo mkdir -p /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}
 cat << OLS_VHOST_EOF | sudo tee /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}/vhconf.conf > /dev/null
@@ -623,7 +647,7 @@ context / {
 }
 OLS_VHOST_EOF
 
-# Ensure OpenLiteSpeed starts up fresh and cleanly
+# Restart OpenLiteSpeed to pick up new listeners
 sudo /usr/local/lsws/bin/lswsctrl restart || sudo /usr/local/lsws/bin/lswsctrl start
 
 # 11. Configure Real-Time .htaccess File Watcher Daemon
