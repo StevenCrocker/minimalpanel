@@ -86,12 +86,10 @@ fi
 echo -e "${CYAN}[5/11] Resetting Stale Configs & Initializing Database Engine...${NC}"
 sudo groupadd -f sftp-users
 
-# Stop old services if re-running
 sudo systemctl stop minimalpanel minimalpanel-htaccess 2>/dev/null || true
 sudo rm -rf /opt/minimalpanel
 
 MYSQL_ROOT_PASS=$(openssl rand -hex 16)
-# Safely reset root password using socket authentication bypass without syntax newline errors
 sudo mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('${MYSQL_ROOT_PASS}'); FLUSH PRIVILEGES;" 2>/dev/null || \
 sudo mariadb -e "SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${MYSQL_ROOT_PASS}'); FLUSH PRIVILEGES;" 2>/dev/null || true
 
@@ -111,14 +109,14 @@ SSHD_EOF
 sudo systemctl restart ssh
 fi
 
-# 8. Write Python Agent & MinimalPanel Dashboard
+# 8. Write Python Agent & MinimalPanel Dashboard (Quoted 'PYTHON_EOF' prevents bash backtick evaluation)
 echo -e "${CYAN}[6/11] Setting Up MinimalPanel Agent (/opt/minimalpanel)...${NC}"
 cd /opt/minimalpanel
 python3 -m venv venv
 ./venv/bin/pip install --upgrade pip
 ./venv/bin/pip install "fastapi[standard]" "uvicorn[standard]" pydantic pyotp qrcode
 
-cat << PYTHON_EOF > /opt/minimalpanel/main.py
+cat << 'PYTHON_EOF' > /opt/minimalpanel/main.py
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
