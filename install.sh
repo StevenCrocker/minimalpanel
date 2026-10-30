@@ -82,14 +82,20 @@ if ! command -v docker &> /dev/null; then
     sudo systemctl enable --now docker
 fi
 
-# 7. Idempotent Cleanup & MariaDB Root Initialization
-echo -e "${CYAN}[5/11] Resetting Stale Configs & Initializing Database Engine...${NC}"
+# 7. Pre-flight Cleanup & MariaDB Root Initialization (Fully Idempotent)
+echo -e "${CYAN}[5/11] Cleaning Orphaned Processes & Resetting Database State...${NC}"
 sudo groupadd -f sftp-users
 
+# Stop and wipe out old agent/watcher instances to prevent port or process locks
 sudo systemctl stop minimalpanel minimalpanel-htaccess 2>/dev/null || true
 sudo rm -rf /opt/minimalpanel
 
+# Clean up any orphaned OpenLiteSpeed processes locking ports 80/443/7080
+sudo /usr/local/lsws/bin/lswsctrl stop 2>/dev/null || true
+sudo killall -9 litespeed lshttpd 2>/dev/null || true
+
 MYSQL_ROOT_PASS=$(openssl rand -hex 16)
+# Reset root password safely regardless of existing auth state
 sudo mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('${MYSQL_ROOT_PASS}'); FLUSH PRIVILEGES;" 2>/dev/null || \
 sudo mariadb -e "SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${MYSQL_ROOT_PASS}'); FLUSH PRIVILEGES;" 2>/dev/null || true
 
@@ -109,7 +115,7 @@ SSHD_EOF
 sudo systemctl restart ssh
 fi
 
-# 8. Write Python Agent & MinimalPanel Dashboard (Quoted 'PYTHON_EOF' prevents bash backtick evaluation)
+# 8. Write Python Agent & MinimalPanel Dashboard
 echo -e "${CYAN}[6/11] Setting Up MinimalPanel Agent (/opt/minimalpanel)...${NC}"
 cd /opt/minimalpanel
 python3 -m venv venv
@@ -617,7 +623,8 @@ context / {
 }
 OLS_VHOST_EOF
 
-sudo /usr/local/lsws/bin/lswsctrl restart
+# Ensure OpenLiteSpeed starts up fresh and cleanly
+sudo /usr/local/lsws/bin/lswsctrl restart || sudo /usr/local/lsws/bin/lswsctrl start
 
 # 11. Configure Real-Time .htaccess File Watcher Daemon
 echo -e "${CYAN}[9/11] Setting Up Real-Time .htaccess Watcher Service...${NC}"
@@ -702,7 +709,7 @@ case "$1" in
         sudo systemctl restart mariadb
         sudo systemctl restart minimalpanel
         sudo systemctl restart minimalpanel-htaccess
-        sudo /usr/local/lsws/bin/lswsctrl restart
+        sudo /usr/local/lsws/bin/lswsctrl restart || sudo /usr/local/lsws/bin/lswsctrl start
         echo -e "${GREEN}All stack services restarted successfully.${NC}"
         ;;
 
@@ -715,13 +722,17 @@ case "$1" in
         ;;
 
     check)
-        SERVICES=("mariadb" "minimalpanel" "minimalpanel-htaccess" "lsws")
+        SERVICES=("mariadb" "minimalpanel" "minimalpanel-htaccess")
         for SERVICE in "${SERVICES[@]}"; do
             if ! systemctl is-active --quiet "$SERVICE"; then
                 echo -e "${RED}WARNING: ${SERVICE} is DOWN! Attempting automatic recovery...${NC}"
                 sudo systemctl restart "$SERVICE"
             fi
         done
+        if ! pgrep -x "litespeed" > /dev/null; then
+            echo -e "${RED}WARNING: OpenLiteSpeed is DOWN! Attempting automatic recovery...${NC}"
+            sudo /usr/local/lsws/bin/lswsctrl start || true
+        fi
 
         OOM_LOGS=$(sudo dmesg -T | grep -i -E 'oom[-_]killer|out of memory' | tail -n 5 || true)
         if [ -n "$OOM_LOGS" ]; then
@@ -753,13 +764,12 @@ case "$1" in
 esac
 EOF
 
-# Safely inject the actual user domain into the generated CLI file
 sudo sed -i "s/HOST_DOMAIN_PLACEHOLDER/${PANEL_DOMAIN}/g" /usr/local/bin/minimalpanel
 sudo chmod +x /usr/local/bin/minimalpanel
 sudo ln -sf /usr/local/bin/minimalpanel /usr/local/bin/mp
 
 # 13. Automated Cron Watchdog (Runs Health Check Every 5 Minutes)
-(crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/minimalpanel check >/dev/null 2>&1") | crontab -
+(crontab -l 2>/dev/null | grep -v "/usr/local/bin/minimalpanel check"; echo "*/5 * * * * /usr/local/bin/minimalpanel check >/dev/null 2>&1") | crontab -
 
 # 14. Initial AutoSSL Request Pre-Check
 echo -e "${CYAN}[11/11] Verifying DNS & Running AutoSSL Request...${NC}"
