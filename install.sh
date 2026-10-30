@@ -599,64 +599,33 @@ SERVICE_EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now minimalpanel.service
 
-# 10. Configure OpenLiteSpeed Listeners & Reverse Proxy Virtual Host for ${PANEL_DOMAIN}
+# 10. Configure OpenLiteSpeed Listeners (Ports 80 & 443) & Virtual Host in httpd_config.conf
 echo -e "${CYAN}[8/11] Configuring OpenLiteSpeed Listeners & Virtual Host for ${PANEL_DOMAIN}...${NC}"
 
-OLS_CONFIG="/usr/local/lsws/conf/httpd_config.xml"
+OLS_CONF="/usr/local/lsws/conf/httpd_config.conf"
 
-# Ensure the config directory exists
-sudo mkdir -p /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}
+# Append Listeners for Port 80 and Port 443 if they do not already exist
+if ! grep -q "listener Port80" "$OLS_CONF"; then
+    cat << 'CONF_LISTENERS_EOF' | sudo tee -a "$OLS_CONF" > /dev/null
 
-# If OpenLiteSpeed config doesn't exist yet, create a minimal valid template
-if [ ! -f "$OLS_CONFIG" ]; then
-    sudo mkdir -p /usr/local/lsws/conf
-    cat << 'FALLBACK_OLS_EOF' | sudo tee "$OLS_CONFIG" > /dev/null
-<httpServerConfig>
-  <listeners>
-  </listeners>
-  <virtualHostList>
-    <virtualHost>
-      <name>Example</name>
-      <vhRoot>Example/</vhRoot>
-      <configFile>conf/vhosts/Example/vhconf.xml</configFile>
-      <allowSymbolLink>1</allowSymbolLink>
-      <enableScript>1</enableScript>
-      <restrained>1</restrained>
-    </virtualHost>
-  </virtualHostList>
-</httpServerConfig>
-FALLBACK_OLS_EOF
+listener Port80 {
+  address                 *
+  port                    80
+  secure                  0
+  bindingAddress          *
+}
+
+listener Port443 {
+  address                 *
+  port                    443
+  secure                  1
+  bindingAddress          *
+}
+CONF_LISTENERS_EOF
 fi
 
-# Ensure listeners for port 80 and 443 exist in httpd_config.xml
-python3 -c '
-config_path = "/usr/local/lsws/conf/httpd_config.xml"
-with open(config_path, "r") as f:
-    content = f.read()
-
-if "Port80" not in content:
-    new_listeners = """
-  listener Port80 {
-    address                 *
-    port                    80
-    secure                  0
-  }
-  listener Port443 {
-    address                 *
-    port                    443
-    secure                  1
-  }
-"""
-    if "listeners {" in content:
-        content = content.replace("listeners {", "listeners {" + new_listeners)
-    elif "<listeners>" in content:
-        content = content.replace("<listeners>", "<listeners>" + new_listeners)
-    
-    with open(config_path, "w") as f:
-        f.write(content)
-'
-
-# Create Virtual Host configuration mapped to your panel domain
+# Create Virtual Host configuration directory and file mapped to your panel domain
+sudo mkdir -p /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}
 cat << OLS_VHOST_EOF | sudo tee /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}/vhconf.conf > /dev/null
 docRoot                   /opt/minimalpanel
 enableGzip                1
@@ -677,38 +646,28 @@ context / {
 }
 OLS_VHOST_EOF
 
-# Automatically map the panel domain to this virtual host inside OLS config
-python3 -c '
-config_path = "/usr/local/lsws/conf/httpd_config.xml"
-domain = "'"${PANEL_DOMAIN}"'"
-vhost_snippet = f"""
-  virtualHost {domain} {{
-    vhRoot                  /usr/local/lsws/conf/vhosts/{domain}
-    configFile              vhosts/{domain}/vhconf.conf
-    allowSymbolLink         1
-    enableScript            1
-    restrained              1
-  }}
-"""
-with open(config_path, "r") as f:
-    content = f.read()
+# Append Virtual Host block and mapping to httpd_config.conf if missing
+if ! grep -q "virtualHost ${PANEL_DOMAIN}" "$OLS_CONF"; then
+    cat << VHOST_BLOCK_EOF | sudo tee -a "$OLS_CONF" > /dev/null
 
-if domain not in content:
-    if "virtualHost Example {" in content:
-        content = content.replace("virtualHost Example {", vhost_snippet + "\n  virtualHost Example {")
-    elif "<virtualHostList>" in content:
-        content = content.replace("<virtualHostList>", "<virtualHostList>" + vhost_snippet)
-    
-    with open(config_path, "w") as f:
-        f.write(content)
-'
+virtualHost ${PANEL_DOMAIN} {
+  vhRoot                  /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}
+  configFile              conf/vhosts/${PANEL_DOMAIN}/vhconf.conf
+  allowSymbolLink         1
+  enableScript            1
+  restrained              1
+}
 
-# Start/Restart OpenLiteSpeed cleanly
+map ${PANEL_DOMAIN} ${PANEL_DOMAIN}
+VHOST_BLOCK_EOF
+fi
+
+# Clean up stale locks and start OpenLiteSpeed fresh
 sudo killall -9 litespeed lshttpd 2>/dev/null || true
 sudo rm -rf /dev/shm/lsws/* 2>/dev/null || true
 sudo rm -f /usr/local/lsws/logs/lshttpd.pid
 sudo rm -f /usr/local/lsws/tmp/*.lock
-sudo /usr/local/lsws/bin/lswsctrl start || true
+sudo /usr/local/lsws/bin/lswsctrl start
 
 # 11. Configure Real-Time .htaccess File Watcher Daemon
 echo -e "${CYAN}[9/11] Setting Up Real-Time .htaccess Watcher Service...${NC}"
