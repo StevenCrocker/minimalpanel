@@ -88,7 +88,13 @@ echo -e "${CYAN}[5/11] Configuring SFTP Security Groups & Database Engine...${NC
 sudo groupadd -f sftp-users
 
 MYSQL_ROOT_PASS=$(openssl rand -hex 16)
-sudo mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASS}'; FLUSH PRIVILEGES;"
+
+# Force root to authenticate via native password plugin and set the generated password safely
+sudo mariadb -u root <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('${MYSQL_ROOT_PASS}');
+SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${MYSQL_ROOT_PASS}');
+FLUSH PRIVILEGES;
+EOF
 
 sudo mkdir -p /opt/minimalpanel
 sudo mkdir -p /var/www/vhosts
