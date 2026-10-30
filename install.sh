@@ -599,16 +599,19 @@ SERVICE_EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now minimalpanel.service
 
-# 10. Configure OpenLiteSpeed Reverse Proxy Virtual Host & Listeners (Ports 80 & 443)
+# 10. Configure OpenLiteSpeed Listeners & Reverse Proxy Virtual Host for ${PANEL_DOMAIN}
 echo -e "${CYAN}[8/11] Configuring OpenLiteSpeed Listeners & Virtual Host for ${PANEL_DOMAIN}...${NC}"
 
-# Ensure listeners for port 80 and 443 exist in httpd_config.xml
-python3 -c '
+OLS_CONFIG="/usr/local/lsws/conf/httpd_config.xml"
+
+if [ -f "$OLS_CONFIG" ]; then
+    # Ensure listeners for port 80 and 443 exist in httpd_config.xml
+    python3 -c '
 config_path = "/usr/local/lsws/conf/httpd_config.xml"
-if open(config_path).read().count("port 80") == 0:
-    with open(config_path, "r") as f:
-        content = f.read()
-    
+with open(config_path, "r") as f:
+    content = f.read()
+
+if "Port80" not in content:
     new_listeners = """
   listener Port80 {
     address                 *
@@ -625,7 +628,9 @@ if open(config_path).read().count("port 80") == 0:
     with open(config_path, "w") as f:
         f.write(content)
 '
+fi
 
+# Create Virtual Host configuration mapped to your panel domain
 sudo mkdir -p /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}
 cat << OLS_VHOST_EOF | sudo tee /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}/vhconf.conf > /dev/null
 docRoot                   /opt/minimalpanel
@@ -647,8 +652,36 @@ context / {
 }
 OLS_VHOST_EOF
 
-# Restart OpenLiteSpeed to pick up new listeners
-sudo /usr/local/lsws/bin/lswsctrl restart || sudo /usr/local/lsws/bin/lswsctrl start
+if [ -f "$OLS_CONFIG" ]; then
+    # Automatically map the panel domain to this virtual host inside OLS config
+    python3 -c '
+config_path = "/usr/local/lsws/conf/httpd_config.xml"
+domain = "'"${PANEL_DOMAIN}"'"
+vhost_snippet = f"""
+  virtualHost {{domain}} {{
+    vhRoot                  /usr/local/lsws/conf/vhosts/{{domain}}
+    configFile              vhosts/{{domain}}/vhconf.conf
+    allowSymbolLink         1
+    enableScript            1
+    restrained              1
+  }}
+"""
+with open(config_path, "r") as f:
+    content = f.read()
+
+if domain not in content:
+    content = content.replace("virtualHost Example {", vhost_snippet + "\n  virtualHost Example {")
+    with open(config_path, "w") as f:
+        f.write(content)
+'
+fi
+
+# Start/Restart OpenLiteSpeed cleanly
+sudo killall -9 litespeed lshttpd 2>/dev/null || true
+sudo rm -rf /dev/shm/lsws/* 2>/dev/null || true
+sudo rm -f /usr/local/lsws/logs/lshttpd.pid
+sudo rm -f /usr/local/lsws/tmp/*.lock
+sudo /usr/local/lsws/bin/lswsctrl start || true
 
 # 11. Configure Real-Time .htaccess File Watcher Daemon
 echo -e "${CYAN}[9/11] Setting Up Real-Time .htaccess Watcher Service...${NC}"
