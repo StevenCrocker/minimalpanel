@@ -29,9 +29,9 @@ if [[ "$DISTRO_ID" != "debian" && "$DISTRO_ID" != "ubuntu" ]]; then
     exit 1
 fi
 
-# 3. System Utilities & Scheduled Security Updates
-echo -e "${CYAN}[1/11] Installing Dependencies & Auto-Security Updates...${NC}"
-sudo apt update -y
+# 3. System Upgrades, Dependencies & Scheduled Security Updates
+echo -e "${CYAN}[1/11] Performing System Upgrade & Installing Dependencies...${NC}"
+sudo apt update -y && sudo apt upgrade -y
 sudo apt install -y python3 python3-pip python3-venv mariadb-server mariadb-client curl openssl unattended-upgrades cron ca-certificates gpg certbot dnsutils git jq inotify-tools
 
 cat << PERIODIC_EOF | sudo tee /etc/apt/apt.conf.d/20auto-upgrades > /dev/null
@@ -478,4 +478,294 @@ HTML_UI = """
 
     async function verify2FA() {
       const code = document.getElementById('totpCode').value;
-      const res = await
+      const res = await fetch('/api/verify-2fa', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ code })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        localStorage.setItem('sessionToken', data.session_token);
+        sessionToken = data.session_token;
+        document.getElementById('authModal').style.display = 'none';
+      } else {
+        alert(data.detail);
+      }
+    }
+
+    function renderLogin() {
+      document.getElementById('authBox').innerHTML = `
+        <h3>MinimalPanel Login</h3>
+        <input type="text" id="loginUser" placeholder="Username">
+        <input type="password" id="loginPass" placeholder="Password">
+        <input type="text" id="loginTotp" placeholder="6-digit 2FA Code">
+        <button class="btn btn-primary" onclick="submitLogin()">Login</button>
+      `;
+    }
+
+    async function submitLogin() {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          username: document.getElementById('loginUser').value,
+          password: document.getElementById('loginPass').value,
+          totp_code: document.getElementById('loginTotp').value
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        localStorage.setItem('sessionToken', data.session_token);
+        sessionToken = data.session_token;
+        document.getElementById('authModal').style.display = 'none';
+      } else {
+        alert(data.detail);
+      }
+    }
+
+    function openWebsiteModal() { document.getElementById('siteModal').style.display = 'flex'; }
+    function closeModal() { document.getElementById('siteModal').style.display = 'none'; }
+    function toggleSiteFields() {
+      const type = document.getElementById('modalType').value;
+      document.getElementById('dockerFields').style.display = type === 'docker' ? 'block' : 'none';
+    }
+
+    async function submitNewSite() {
+      const payload = {
+        token: sessionToken,
+        client_id: 'cli_1',
+        site_type: document.getElementById('modalType').value,
+        php_version: document.getElementById('modalPhpVer').value,
+        domain: document.getElementById('modalDomain').value,
+        website_id: 'web_' + Math.random().toString(36).substring(2, 8),
+        docker_compose_content: document.getElementById('modalDockerCompose').value,
+      };
+
+      const res = await fetch('/api/create-site', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+
+      const result = await res.json();
+      if (res.ok) {
+        alert('Site Provisioned Successfully!\\nSFTP User: ' + result.sftp.user + '\\nSFTP Pass: ' + result.sftp.pass + '\\nDB Pass: ' + result.db.pass);
+        closeModal();
+      } else {
+        alert('Error: ' + result.detail);
+      }
+    }
+
+    checkStatus();
+  </script>
+</body>
+</html>
+"""
+PYTHON_EOF
+
+# 9. Register MinimalPanel Systemd Service
+echo -e "${CYAN}[7/11] Registering Systemd Agent Service...${NC}"
+cat << SERVICE_EOF | sudo tee /etc/systemd/system/minimalpanel.service > /dev/null
+[Unit]
+Description=MinimalPanel Agent & Control Console
+After=network.target mariadb.service docker.service
+
+[Service]
+User=root
+WorkingDirectory=/opt/minimalpanel
+ExecStart=/opt/minimalpanel/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8080
+Restart=always
+RestartSec=3s
+StartLimitIntervalSec=60s
+StartLimitBurst=10
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now minimalpanel.service
+
+# 10. Configure OpenLiteSpeed Reverse Proxy Virtual Host
+echo -e "${CYAN}[8/11] Configuring OpenLiteSpeed Reverse Proxy for ${PANEL_DOMAIN}...${NC}"
+
+sudo mkdir -p /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}
+cat << OLS_VHOST_EOF | sudo tee /usr/local/lsws/conf/vhosts/${PANEL_DOMAIN}/vhconf.conf > /dev/null
+docRoot                   /opt/minimalpanel
+enableGzip                1
+
+extprocessor minimalpanel-agent {
+  type                    proxy
+  address                 127.0.0.1:8080
+  maxConns                100
+  initTimeout             60
+  retryTimeout            0
+  respBuffer              0
+}
+
+context / {
+  type                    proxy
+  handler                 minimalpanel-agent
+  addDefaultCharset       off
+}
+OLS_VHOST_EOF
+
+sudo /usr/local/lsws/bin/lswsctrl restart
+
+# 11. Configure Real-Time .htaccess File Watcher Daemon
+echo -e "${CYAN}[9/11] Setting Up Real-Time .htaccess Watcher Service...${NC}"
+
+cat << 'WATCHER_EOF' | sudo tee /opt/minimalpanel/htaccess-watcher.sh > /dev/null
+#!/bin/bash
+
+WATCH_DIR="/var/www/vhosts"
+DEBOUNCE_SEC=2
+
+mkdir -p "$WATCH_DIR"
+
+echo "MinimalPanel .htaccess Watcher Active on $WATCH_DIR"
+
+inotifywait -m -r -e modify,create,delete --format '%w%f' "$WATCH_DIR" 2>/dev/null | while read FILE; do
+    if [[ "$FILE" == *".htaccess"* ]]; then
+        echo "Detected change in $FILE. Queueing OpenLiteSpeed reload..."
+        sleep $DEBOUNCE_SEC
+        while read -t 1 DEBOUNCE_FILE; do :; done
+        /usr/local/lsws/bin/lswsctrl reload
+        echo "OpenLiteSpeed gracefully reloaded."
+    fi
+done
+WATCHER_EOF
+
+sudo chmod +x /opt/minimalpanel/htaccess-watcher.sh
+
+cat << WATCHER_SERVICE_EOF | sudo tee /etc/systemd/system/minimalpanel-htaccess.service > /dev/null
+[Unit]
+Description=MinimalPanel .htaccess Real-Time Watcher
+After=network.target lsws.service
+
+[Service]
+User=root
+ExecStart=/opt/minimalpanel/htaccess-watcher.sh
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+WATCHER_SERVICE_EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now minimalpanel-htaccess.service
+
+# 12. Generate Helper CLI Script (/usr/local/bin/minimalpanel & /usr/local/bin/mp)
+echo -e "${CYAN}[10/11] Installing Helper CLI Utility (/usr/local/bin/minimalpanel)...${NC}"
+
+cat << CLI_EOF | sudo tee /usr/local/bin/minimalpanel > /dev/null
+#!/bin/bash
+
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+PANEL_DOMAIN="${PANEL_DOMAIN}"
+
+case "\$1" in
+    ssl)
+        echo -e "\${CYAN}Verifying DNS resolution for \${PANEL_DOMAIN}...\${NC}"
+        SERVER_IP=\$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+        DOMAIN_IP=\$(dig +short A "\${PANEL_DOMAIN}" | tail -n1)
+
+        echo -e "Server Public IP: \${CYAN}\${SERVER_IP}\${NC}"
+        echo -e "Domain Resolved IP: \${CYAN}\${DOMAIN_IP:-Unresolved}\${NC}"
+
+        if [ "\$SERVER_IP" = "\$DOMAIN_IP" ]; then
+            echo -e "\${GREEN}DNS verified! Issuing Let's Encrypt SSL Certificate...\${NC}"
+            sudo certbot certonly --webroot -w /opt/minimalpanel -d \${PANEL_DOMAIN} --non-interactive --agree-tos -m admin@\${PANEL_DOMAIN}
+            sudo /usr/local/lsws/bin/lswsctrl restart
+            echo -e "\${GREEN}SSL Certificate successfully issued and web server reloaded!\${NC}"
+        else
+            echo -e "\${RED}Error: DNS record (\${DOMAIN_IP:-Unresolved}) does not match Server IP (\${SERVER_IP}).\${NC}"
+            echo -e "\${YELLOW}Please update your DNS A record to point to \${SERVER_IP} and try again.\${NC}"
+        fi
+        ;;
+
+    restart)
+        echo -e "\${CYAN}Restarting Core Stack Services...\${NC}"
+        sudo systemctl restart mariadb
+        sudo systemctl restart minimalpanel
+        sudo systemctl restart minimalpanel-htaccess
+        sudo /usr/local/lsws/bin/lswsctrl restart
+        echo -e "\${GREEN}All stack services restarted successfully.\${NC}"
+        ;;
+
+    status)
+        echo -e "\${CYAN}=== MinimalPanel & Core Services Status ===\${NC}"
+        sudo systemctl status minimalpanel --no-pager
+        sudo systemctl status minimalpanel-htaccess --no-pager
+        sudo systemctl status mariadb --no-pager
+        sudo systemctl status lsws --no-pager
+        ;;
+
+    check)
+        SERVICES=("mariadb" "minimalpanel" "minimalpanel-htaccess" "lsws")
+        for SERVICE in "\${SERVICES[@]}"; do
+            if ! systemctl is-active --quiet "\$SERVICE"; then
+                echo -e "\${RED}WARNING: \${SERVICE} is DOWN! Attempting automatic recovery...\${NC}"
+                sudo systemctl restart "\$SERVICE"
+            fi
+        done
+
+        OOM_LOGS=\$(sudo dmesg -T | grep -i -E 'oom[-_]killer|out of memory' | tail -n 5 || true)
+        if [ -n "\$OOM_LOGS" ]; then
+            echo -e "\${RED}Recent OOM Events Detected:\${NC}\n\${OOM_LOGS}"
+        fi
+        ;;
+
+    reset-2fa)
+        echo -e "\${YELLOW}Resetting 2FA state in /opt/minimalpanel/config.json...\${NC}"
+        if [ -f /opt/minimalpanel/config.json ]; then
+            sudo jq '.2fa_enabled = false | del(.qr_code)' /opt/minimalpanel/config.json > /tmp/cfg.json
+            sudo mv /tmp/cfg.json /opt/minimalpanel/config.json
+            sudo systemctl restart minimalpanel
+            echo -e "\${GREEN}2FA successfully reset. Re-open your browser to scan a new QR code.\${NC}"
+        else
+            echo -e "\${RED}Config file not found.\${NC}"
+        fi
+        ;;
+
+    *)
+        echo -e "\${CYAN}MinimalPanel CLI Helper\${NC}"
+        echo -e "Usage: minimalpanel {check|ssl|restart|status|reset-2fa} (or use shorthand 'mp')"
+        echo -e "  ${GREEN}minimalpanel check${NC}     - Inspect health, restart dead services & check OOM logs"
+        echo -e "  ${GREEN}minimalpanel ssl${NC}       - Verify DNS & request AutoSSL certificate"
+        echo -e "  ${GREEN}minimalpanel restart${NC}   - Restart MinimalPanel agent, MariaDB, and web server"
+        echo -e "  ${GREEN}minimalpanel status${NC}    - View running status of core services"
+        echo -e "  ${GREEN}minimalpanel reset-2fa${NC} - Reset 2FA configuration"
+        ;;
+esac
+CLI_EOF
+
+sudo chmod +x /usr/local/bin/minimalpanel
+sudo ln -sf /usr/local/bin/minimalpanel /usr/local/bin/mp
+
+# 13. Automated Cron Watchdog (Runs Health Check Every 5 Minutes)
+(crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/minimalpanel check >/dev/null 2>&1") | crontab -
+
+# 14. Initial AutoSSL Request Pre-Check
+echo -e "${CYAN}[11/11] Verifying DNS & Running AutoSSL Request...${NC}"
+sudo /usr/local/bin/minimalpanel ssl || true
+
+# Summary Output
+echo -e "\n${GREEN}====================================================${NC}"
+echo -e "${GREEN} SUCCESS: MinimalPanel Successfully Deployed!${NC}"
+echo -e "${GREEN}====================================================${NC}\n"
+echo -e "MinimalPanel URL: ${CYAN}http://${PANEL_DOMAIN}${NC}"
+echo -e "Installed PHP Handlers: ${CYAN}7.4, 8.2, 8.3, 8.4, 8.5${NC}"
+echo -e "Real-Time .htaccess Watcher: ${CYAN}ACTIVE (Auto-reloads OLS on changes)${NC}"
+echo -e "CLI Helper Commands: Run ${CYAN}minimalpanel${NC} or ${CYAN}mp${NC} in SSH terminal"
+echo -e "  - ${CYAN}mp ssl${NC}       (Verify DNS & issue Let's Encrypt SSL)"
+echo -e "  - ${CYAN}mp check${NC}     (Check service health & auto-recover from crashes)"
+echo -e "  - ${CYAN}mp restart${NC}   (Restart MinimalPanel agent, MariaDB, & OLS)"
+echo -e "  - ${CYAN}mp reset-2fa${NC} (Reset lost 2FA credentials)"
