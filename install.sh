@@ -11,8 +11,8 @@ NC='\033[0m'
 
 echo -e "${CYAN}=== MinimalPanel (Bare-Metal Shared Stack & Agent Installer) ===${NC}"
 
-# 1. Prompt for Control Panel Domain Name
-read -p "Enter MinimalPanel domain name (e.g., hosting.stevencrocker.com): " PANEL_DOMAIN
+# 1. Prompt for Control Panel Domain Name (Reading directly from /dev/tty for pipe compatibility)
+read -p "Enter MinimalPanel domain name (e.g., hosting.stevencrocker.com): " PANEL_DOMAIN </dev/tty
 if [ -z "$PANEL_DOMAIN" ]; then
     echo -e "${RED}Error: Domain name cannot be empty.${NC}"
     exit 1
