@@ -11,8 +11,8 @@ NC='\033[0m'
 
 echo -e "${CYAN}=== MinimalPanel (Bare-Metal Shared Stack & Agent Installer) ===${NC}"
 
-# 1. Prompt for Control Panel Domain Name (Reading directly from /dev/tty for pipe compatibility)
-read -p "Enter MinimalPanel domain name (e.g., hosting.yourdomain.com): " PANEL_DOMAIN </dev/tty
+# 1. Prompt for Control Panel Domain Name (Explicitly read from /dev/tty for pipe compatibility)
+read -p "Enter MinimalPanel domain name (e.g., hosting.stevencrocker.com): " PANEL_DOMAIN </dev/tty
 if [ -z "$PANEL_DOMAIN" ]; then
     echo -e "${RED}Error: Domain name cannot be empty.${NC}"
     exit 1
@@ -660,7 +660,7 @@ sudo systemctl enable --now minimalpanel-htaccess.service
 # 12. Generate Helper CLI Script (/usr/local/bin/minimalpanel & /usr/local/bin/mp)
 echo -e "${CYAN}[10/11] Installing Helper CLI Utility (/usr/local/bin/minimalpanel)...${NC}"
 
-cat << CLI_EOF | sudo tee /usr/local/bin/minimalpanel > /dev/null
+cat << 'CLI_EOF' | sudo tee /usr/local/bin/minimalpanel > /dev/null
 #!/bin/bash
 
 GREEN='\033[0;32m'
@@ -671,37 +671,37 @@ NC='\033[0m'
 
 PANEL_DOMAIN="${PANEL_DOMAIN}"
 
-case "\$1" in
+case "$1" in
     ssl)
-        echo -e "\${CYAN}Verifying DNS resolution for \${PANEL_DOMAIN}...\${NC}"
-        SERVER_IP=\$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
-        DOMAIN_IP=\$(dig +short A "\${PANEL_DOMAIN}" | tail -n1)
+        echo -e "${CYAN}Verifying DNS resolution for ${PANEL_DOMAIN}...${NC}"
+        SERVER_IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+        DOMAIN_IP=$(dig +short A "${PANEL_DOMAIN}" | tail -n1)
 
-        echo -e "Server Public IP: \${CYAN}\${SERVER_IP}\${NC}"
-        echo -e "Domain Resolved IP: \${CYAN}\${DOMAIN_IP:-Unresolved}\${NC}"
+        echo -e "Server Public IP: ${CYAN}${SERVER_IP}${NC}"
+        echo -e "Domain Resolved IP: ${CYAN}${DOMAIN_IP:-Unresolved}${NC}"
 
-        if [ "\$SERVER_IP" = "\$DOMAIN_IP" ]; then
-            echo -e "\${GREEN}DNS verified! Issuing Let's Encrypt SSL Certificate...\${NC}"
-            sudo certbot certonly --webroot -w /opt/minimalpanel -d \${PANEL_DOMAIN} --non-interactive --agree-tos -m admin@\${PANEL_DOMAIN}
+        if [ "$SERVER_IP" = "$DOMAIN_IP" ]; then
+            echo -e "${GREEN}DNS verified! Issuing Let's Encrypt SSL Certificate...${NC}"
+            sudo certbot certonly --webroot -w /opt/minimalpanel -d ${PANEL_DOMAIN} --non-interactive --agree-tos -m admin@${PANEL_DOMAIN}
             sudo /usr/local/lsws/bin/lswsctrl restart
-            echo -e "\${GREEN}SSL Certificate successfully issued and web server reloaded!\${NC}"
+            echo -e "${GREEN}SSL Certificate successfully issued and web server reloaded!${NC}"
         else
-            echo -e "\${RED}Error: DNS record (\${DOMAIN_IP:-Unresolved}) does not match Server IP (\${SERVER_IP}).\${NC}"
-            echo -e "\${YELLOW}Please update your DNS A record to point to \${SERVER_IP} and try again.\${NC}"
+            echo -e "${RED}Error: DNS record (${DOMAIN_IP:-Unresolved}) does not match Server IP (${SERVER_IP}).${NC}"
+            echo -e "${YELLOW}Please update your DNS A record to point to ${SERVER_IP} and try again.${NC}"
         fi
         ;;
 
     restart)
-        echo -e "\${CYAN}Restarting Core Stack Services...\${NC}"
+        echo -e "${CYAN}Restarting Core Stack Services...${NC}"
         sudo systemctl restart mariadb
         sudo systemctl restart minimalpanel
         sudo systemctl restart minimalpanel-htaccess
         sudo /usr/local/lsws/bin/lswsctrl restart
-        echo -e "\${GREEN}All stack services restarted successfully.\${NC}"
+        echo -e "${GREEN}All stack services restarted successfully.${NC}"
         ;;
 
     status)
-        echo -e "\${CYAN}=== MinimalPanel & Core Services Status ===\${NC}"
+        echo -e "${CYAN}=== MinimalPanel & Core Services Status ===${NC}"
         sudo systemctl status minimalpanel --no-pager
         sudo systemctl status minimalpanel-htaccess --no-pager
         sudo systemctl status mariadb --no-pager
@@ -710,33 +710,33 @@ case "\$1" in
 
     check)
         SERVICES=("mariadb" "minimalpanel" "minimalpanel-htaccess" "lsws")
-        for SERVICE in "\${SERVICES[@]}"; do
-            if ! systemctl is-active --quiet "\$SERVICE"; then
-                echo -e "\${RED}WARNING: \${SERVICE} is DOWN! Attempting automatic recovery...\${NC}"
-                sudo systemctl restart "\$SERVICE"
+        for SERVICE in "${SERVICES[@]}"; do
+            if ! systemctl is-active --quiet "$SERVICE"; then
+                echo -e "${RED}WARNING: ${SERVICE} is DOWN! Attempting automatic recovery...${NC}"
+                sudo systemctl restart "$SERVICE"
             fi
         done
 
-        OOM_LOGS=\$(sudo dmesg -T | grep -i -E 'oom[-_]killer|out of memory' | tail -n 5 || true)
-        if [ -n "\$OOM_LOGS" ]; then
-            echo -e "\${RED}Recent OOM Events Detected:\${NC}\n\${OOM_LOGS}"
+        OOM_LOGS=$(sudo dmesg -T | grep -i -E 'oom[-_]killer|out of memory' | tail -n 5 || true)
+        if [ -n "$OOM_LOGS" ]; then
+            echo -e "${RED}Recent OOM Events Detected:${NC}\n${OOM_LOGS}"
         fi
         ;;
 
     reset-2fa)
-        echo -e "\${YELLOW}Resetting 2FA state in /opt/minimalpanel/config.json...\${NC}"
+        echo -e "${YELLOW}Resetting 2FA state in /opt/minimalpanel/config.json...${NC}"
         if [ -f /opt/minimalpanel/config.json ]; then
             sudo jq '.2fa_enabled = false | del(.qr_code)' /opt/minimalpanel/config.json > /tmp/cfg.json
             sudo mv /tmp/cfg.json /opt/minimalpanel/config.json
             sudo systemctl restart minimalpanel
-            echo -e "\${GREEN}2FA successfully reset. Re-open your browser to scan a new QR code.\${NC}"
+            echo -e "${GREEN}2FA successfully reset. Re-open your browser to scan a new QR code.${NC}"
         else
-            echo -e "\${RED}Config file not found.\${NC}"
+            echo -e "${RED}Config file not found.${NC}"
         fi
         ;;
 
     *)
-        echo -e "\${CYAN}MinimalPanel CLI Helper\${NC}"
+        echo -e "${CYAN}MinimalPanel CLI Helper${NC}"
         echo -e "Usage: minimalpanel {check|ssl|restart|status|reset-2fa} (or use shorthand 'mp')"
         echo -e "  ${GREEN}minimalpanel check${NC}     - Inspect health, restart dead services & check OOM logs"
         echo -e "  ${GREEN}minimalpanel ssl${NC}       - Verify DNS & request AutoSSL certificate"
