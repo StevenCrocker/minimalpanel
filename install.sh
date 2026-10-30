@@ -83,14 +83,12 @@ if ! command -v docker &> /dev/null; then
     sudo systemctl enable --now docker
 fi
 
-# 7. OpenSSH Chroot Rules & MariaDB Root Password Initialization Fix
+# 7. OpenSSH Chroot Rules & MariaDB Root Initialization
 echo -e "${CYAN}[5/11] Configuring SFTP Security Groups & Database Engine...${NC}"
 sudo groupadd -f sftp-users
 
 MYSQL_ROOT_PASS=$(openssl rand -hex 16)
-# Safely set root password using sudo socket authentication bypass
-sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('${MYSQL_ROOT_PASS}'); FLUSH PRIVILEGES;" || \
-sudo mysql -e "SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${MYSQL_ROOT_PASS}'); FLUSH PRIVILEGES;"
+sudo mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASS}'; FLUSH PRIVILEGES;"
 
 sudo mkdir -p /opt/minimalpanel
 sudo mkdir -p /var/www/vhosts
