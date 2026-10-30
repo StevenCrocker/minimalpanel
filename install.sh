@@ -56,13 +56,12 @@ sudo systemctl restart mariadb
 echo -e "${CYAN}[3/11] Installing OpenLiteSpeed & PHP Runtimes...${NC}"
 wget -O - https://repo.litespeed.sh | sudo bash
 sudo apt update -y
-# Install modern PHP versions securely, allowing legacy 7.4 to fail gracefully if unsupported by OS
 sudo apt install -y openlitespeed \
   lsphp82 lsphp82-mysql lsphp82-common \
   lsphp83 lsphp83-mysql lsphp83-common \
   lsphp84 lsphp84-mysql lsphp84-common \
   lsphp85 lsphp85-mysql lsphp85-common || true
-sudo apt install -y lsphp74 lsphp74-mysql lsphp74-common || echo "Notice: PHP 7.4 is unavailable on this OS version and was skipped."
+sudo apt install -y lsphp74 lsphp74-mysql lsphp74-common || echo "Notice: PHP 7.4 skipped (unavailable on this OS)."
 
 # 6. Docker Engine (For Custom Docker Compose Sites)
 if ! command -v docker &> /dev/null; then
@@ -83,18 +82,18 @@ if ! command -v docker &> /dev/null; then
     sudo systemctl enable --now docker
 fi
 
-# 7. OpenSSH Chroot Rules & MariaDB Root Initialization
-echo -e "${CYAN}[5/11] Configuring SFTP Security Groups & Database Engine...${NC}"
+# 7. Idempotent Cleanup & MariaDB Root Initialization
+echo -e "${CYAN}[5/11] Resetting Stale Configs & Initializing Database Engine...${NC}"
 sudo groupadd -f sftp-users
 
-MYSQL_ROOT_PASS=$(openssl rand -hex 16)
+# Stop old services if re-running
+sudo systemctl stop minimalpanel minimalpanel-htaccess 2>/dev/null || true
+sudo rm -rf /opt/minimalpanel
 
-# Force root to authenticate via native password plugin and set the generated password safely
-sudo mariadb -u root <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('${MYSQL_ROOT_PASS}');
-SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${MYSQL_ROOT_PASS}');
-FLUSH PRIVILEGES;
-EOF
+MYSQL_ROOT_PASS=$(openssl rand -hex 16)
+# Safely reset root password using socket authentication bypass without syntax newline errors
+sudo mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('${MYSQL_ROOT_PASS}'); FLUSH PRIVILEGES;" 2>/dev/null || \
+sudo mariadb -e "SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${MYSQL_ROOT_PASS}'); FLUSH PRIVILEGES;" 2>/dev/null || true
 
 sudo mkdir -p /opt/minimalpanel
 sudo mkdir -p /var/www/vhosts
